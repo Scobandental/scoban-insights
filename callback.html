@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="theme-color" content="#081521">
+  <title>TikTok Authorization — Scoban Insights</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .callback-main{min-height:calc(100vh - 84px);display:grid;place-items:center;padding:48px 24px;background:radial-gradient(circle at 75% 10%,rgba(39,214,178,.15),transparent 30%),var(--paper)}
+    .callback-card{width:min(100%,680px);padding:44px;border:1px solid var(--line);border-radius:18px;background:#fff;box-shadow:0 24px 70px rgba(7,21,34,.12)}
+    .callback-icon{width:54px;height:54px;display:grid;place-items:center;margin-bottom:26px;border-radius:50%;background:#e9f8f4;color:var(--teal-dark);font-size:25px;font-weight:700}
+    .callback-card h1{font:700 clamp(30px,5vw,42px)/1.15 var(--display);letter-spacing:-.04em;margin-bottom:14px}
+    .callback-card>p{color:var(--muted)}
+    .code-panel{margin:28px 0 18px;padding:20px;border:1px solid var(--line);border-radius:10px;background:#f4f7f6}
+    .code-panel label{display:block;margin-bottom:8px;color:#6b7a84;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.1em}
+    .code-value{overflow-wrap:anywhere;font:600 14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink)}
+    .callback-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:22px}
+    .callback-note{margin-top:24px;padding-top:20px;border-top:1px solid var(--line);font-size:12px!important}
+    .callback-error .callback-icon{background:#fff0ed;color:#c63f2d}
+    @media(max-width:620px){.callback-card{padding:30px 22px}.callback-actions .button{width:100%}}
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">SI</span><span>Scoban Insights</span></a>
+    <nav aria-label="Primary navigation"><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a></nav>
+  </header>
+
+  <main class="callback-main">
+    <section class="callback-card" id="card" aria-live="polite">
+      <div class="callback-icon" id="icon" aria-hidden="true">✓</div>
+      <p class="eyebrow"><span></span> TikTok Login Kit</p>
+      <h1 id="heading">Authorization received</h1>
+      <p id="message">TikTok returned an authorization response to Scoban Insights.</p>
+
+      <div class="code-panel" id="code-panel" hidden>
+        <label for="code-value">Authorization code</label>
+        <div class="code-value" id="code-value"></div>
+      </div>
+
+      <div class="callback-actions">
+        <button class="button button-primary" id="copy-button" type="button" hidden>Copy authorization code</button>
+        <a class="button button-secondary" href="index.html">Return to Scoban Insights</a>
+      </div>
+      <p class="callback-note">For your security, this page does not store or transmit the authorization response. Authorization codes are short-lived and should not be shared publicly.</p>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var code = params.get('code');
+      var error = params.get('error');
+      var errorDescription = params.get('error_description');
+      var card = document.getElementById('card');
+      var heading = document.getElementById('heading');
+      var message = document.getElementById('message');
+      var icon = document.getElementById('icon');
+      var codePanel = document.getElementById('code-panel');
+      var codeValue = document.getElementById('code-value');
+      var copyButton = document.getElementById('copy-button');
+
+      if (error) {
+        card.classList.add('callback-error');
+        icon.textContent = '!';
+        heading.textContent = 'Authorization was not completed';
+        message.textContent = errorDescription || 'TikTok did not grant authorization. You may return and try again.';
+      } else if (code) {
+        codeValue.textContent = code;
+        codePanel.hidden = false;
+        copyButton.hidden = false;
+        message.textContent = 'TikTok authorization succeeded. Copy this one-time code and return to the integration setup.';
+        copyButton.addEventListener('click', function () {
+          navigator.clipboard.writeText(code).then(function () {
+            copyButton.textContent = 'Copied';
+          });
+        });
+      } else {
+        icon.textContent = '…';
+        heading.textContent = 'Callback endpoint ready';
+        message.textContent = 'This page is ready to receive TikTok authorization responses. No authorization code was included in this visit.';
+      }
+    }());
+  </script>
+</body>
+</html>
