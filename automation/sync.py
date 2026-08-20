@@ -108,7 +108,7 @@ def feishu(path, token, data=None):
     return result.get("data") or {}
 
 
-def existing_records(state, token):
+def existing_records(state, token, table_id):
     records, page_token = [], None
     while True:
         query = {"page_size": 500}
@@ -116,7 +116,7 @@ def existing_records(state, token):
             query["page_token"] = page_token
         path = (
             f"/bitable/v1/apps/{state['feishu_app_token']}/tables/"
-            f"{state['feishu_table_id']}/records?{urllib.parse.urlencode(query)}"
+            f"{table_id}/records?{urllib.parse.urlencode(query)}"
         )
         data = feishu(path, token)
         records.extend(data.get("items") or [])
@@ -137,28 +137,27 @@ def main():
     cipher = Fernet(key)
     state = load_state(cipher)
     token = feishu_token(state)
-    existing = existing_records(state, token)
-    record_ids = {
-        (
-            str(record.get("fields", {}).get("Account") or ""),
-            str(record.get("fields", {}).get("Video ID") or ""),
-        ): record.get("record_id")
-        for record in existing
-        if record.get("fields", {}).get("Video ID")
-    }
     now = int(time.time() * 1000)
-    creates, updates = [], []
+    total_existing = total_creates = total_updates = 0
     account_counts = []
     for account in state["accounts"]:
         account_name = account["name"]
+        table_id = account["table_id"]
         access_token = refresh_tiktok(state, account)
         videos = fetch_videos(access_token)
         account_counts.append(f"{account_name}={len(videos)}")
+        existing = existing_records(state, token, table_id)
+        total_existing += len(existing)
+        record_ids = {
+            str(record.get("fields", {}).get("Video ID") or ""): record.get("record_id")
+            for record in existing
+            if record.get("fields", {}).get("Video ID")
+        }
+        creates, updates = [], []
         for video in videos:
             video_id = str(video.get("id", ""))
             share_url = video.get("share_url") or ""
             fields = {
-                "Account": account_name,
                 "Video ID": video_id,
                 "Caption": video.get("title") or video.get("video_description") or "",
                 "Posted Date": int(video.get("create_time") or 0) * 1000,
@@ -170,24 +169,25 @@ def main():
             }
             if share_url:
                 fields["TikTok URL"] = {"link": share_url, "text": share_url}
-            key = (account_name, video_id)
-            if key in record_ids:
-                updates.append({"record_id": record_ids[key], "fields": fields})
+            if video_id in record_ids:
+                updates.append({"record_id": record_ids[video_id], "fields": fields})
             else:
                 creates.append({"fields": fields})
-
-    base = (
-        f"/bitable/v1/apps/{state['feishu_app_token']}/tables/"
-        f"{state['feishu_table_id']}/records"
-    )
-    for batch in chunks(updates):
-        feishu(base + "/batch_update", token, {"records": batch})
-    for batch in chunks(creates):
-        feishu(base + "/batch_create", token, {"records": batch})
+        base = (
+            f"/bitable/v1/apps/{state['feishu_app_token']}/tables/"
+            f"{table_id}/records"
+        )
+        for batch in chunks(updates):
+            feishu(base + "/batch_update", token, {"records": batch})
+        for batch in chunks(creates):
+            feishu(base + "/batch_create", token, {"records": batch})
+        total_updates += len(updates)
+        total_creates += len(creates)
     save_state(cipher, state)
     print(
-        f"Sync complete: {len(updates)} updated, {len(creates)} added, "
-        f"{len(existing) + len(creates)} total rows ({', '.join(account_counts)})."
+        f"Sync complete: {total_updates} updated, {total_creates} added, "
+        f"{total_existing + total_creates} total rows across separate tables "
+        f"({', '.join(account_counts)})."
     )
 
 
