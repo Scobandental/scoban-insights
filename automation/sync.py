@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 
 import certifi
@@ -67,7 +68,7 @@ def refresh_tiktok(state, account):
 
 
 def fetch_videos(access_token):
-    fields = "id,title,video_description,create_time,share_url,view_count,like_count,comment_count,share_count"
+    fields = "id,title,video_description,create_time,share_url,cover_image_url,view_count,like_count,comment_count,share_count"
     url = "https://open.tiktokapis.com/v2/video/list/?fields=" + fields
     videos, cursor = [], 0
     while True:
@@ -130,6 +131,61 @@ def chunks(items, size=100):
         yield items[start : start + size]
 
 
+def upload_cover(cover_url, video_id, app_token, tenant_token):
+    try:
+        download_request = urllib.request.Request(
+            cover_url, headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(download_request, timeout=45, context=TLS) as response:
+            image = response.read()
+            mime = response.headers.get_content_type()
+        boundary = "----Scoban" + uuid.uuid4().hex
+        extension = {"image/webp": "webp", "image/png": "png"}.get(mime, "jpg")
+        filename = f"{video_id}.{extension}"
+        parts = []
+
+        def field(name, value):
+            parts.extend(
+                [
+                    f"--{boundary}\r\n".encode(),
+                    f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
+                    str(value).encode(),
+                    b"\r\n",
+                ]
+            )
+
+        field("file_name", filename)
+        field("parent_type", "bitable_image")
+        field("parent_node", app_token)
+        field("size", len(image))
+        parts.extend(
+            [
+                f"--{boundary}\r\n".encode(),
+                f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode(),
+                f"Content-Type: {mime}\r\n\r\n".encode(),
+                image,
+                b"\r\n",
+                f"--{boundary}--\r\n".encode(),
+            ]
+        )
+        upload_request = urllib.request.Request(
+            "https://open.feishu.cn/open-apis/drive/v1/medias/upload_all",
+            data=b"".join(parts),
+            headers={
+                "Authorization": "Bearer " + tenant_token,
+                "Content-Type": "multipart/form-data; boundary=" + boundary,
+            },
+        )
+        with urllib.request.urlopen(upload_request, timeout=60, context=TLS) as response:
+            result = json.loads(response.read())
+        file_token = (result.get("data") or {}).get("file_token")
+        if result.get("code") != 0 or not file_token:
+            return None
+        return [{"file_token": file_token}]
+    except Exception:
+        return None
+
+
 def main():
     key = os.environ.get("SYNC_ENCRYPTION_KEY", "").encode()
     if not key:
@@ -139,6 +195,7 @@ def main():
     token = feishu_token(state)
     now = int(time.time() * 1000)
     total_existing = total_creates = total_updates = 0
+    covers_added = cover_failures = 0
     account_counts = []
     for account in state["accounts"]:
         account_name = account["name"]
@@ -148,8 +205,8 @@ def main():
         account_counts.append(f"{account_name}={len(videos)}")
         existing = existing_records(state, token, table_id)
         total_existing += len(existing)
-        record_ids = {
-            str(record.get("fields", {}).get("Video ID") or ""): record.get("record_id")
+        records_by_video = {
+            str(record.get("fields", {}).get("Video ID") or ""): record
             for record in existing
             if record.get("fields", {}).get("Video ID")
         }
@@ -169,8 +226,22 @@ def main():
             }
             if share_url:
                 fields["TikTok URL"] = {"link": share_url, "text": share_url}
-            if video_id in record_ids:
-                updates.append({"record_id": record_ids[video_id], "fields": fields})
+            existing_record = records_by_video.get(video_id)
+            has_cover = bool((existing_record or {}).get("fields", {}).get("Video Cover"))
+            if not has_cover and video.get("cover_image_url"):
+                cover = upload_cover(
+                    video["cover_image_url"],
+                    video_id,
+                    state["feishu_app_token"],
+                    token,
+                )
+                if cover:
+                    fields["Video Cover"] = cover
+                    covers_added += 1
+                else:
+                    cover_failures += 1
+            if existing_record:
+                updates.append({"record_id": existing_record["record_id"], "fields": fields})
             else:
                 creates.append({"fields": fields})
         base = (
@@ -187,7 +258,8 @@ def main():
     print(
         f"Sync complete: {total_updates} updated, {total_creates} added, "
         f"{total_existing + total_creates} total rows across separate tables "
-        f"({', '.join(account_counts)})."
+        f"({', '.join(account_counts)}); {covers_added} covers added, "
+        f"{cover_failures} covers unavailable."
     )
 
 
