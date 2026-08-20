@@ -31,10 +31,15 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check certifi cryptography
 
-      - name: Synchronize TikTok analytics
+      - name: Synchronize TikTok analytics into Base
         env:
           SYNC_ENCRYPTION_KEY: ${{ secrets.SYNC_ENCRYPTION_KEY }}
         run: python automation/sync.py
+
+      - name: Rebuild combined Scoban and Saludent Sheet
+        env:
+          SYNC_ENCRYPTION_KEY: ${{ secrets.SYNC_ENCRYPTION_KEY }}
+        run: python automation/base_to_sheet.py
 
       - name: Save rotated encrypted token
         run: |
