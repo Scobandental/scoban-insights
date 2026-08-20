@@ -17,8 +17,6 @@ from cryptography.fernet import Fernet, InvalidToken
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.enc"
 TLS = ssl.create_default_context(cafile=certifi.where())
-SHEET_WIKI_TOKEN = "Q4fow4YHVi8fkwkdJFDcb75InRg"
-SHEET_ID = "dSOaUs"
 HEADERS = ["Account", "Video ID", "Caption", "Posted Date", "TikTok URL", "Views"]
 
 
@@ -47,6 +45,13 @@ def load_state():
         return json.loads(Fernet(key).decrypt(STATE_FILE.read_bytes()))
     except (InvalidToken, ValueError, KeyError) as error:
         raise RuntimeError("Encrypted sync state could not be opened") from error
+
+
+def save_state(state):
+    key = os.environ["SYNC_ENCRYPTION_KEY"].encode()
+    temporary = STATE_FILE.with_suffix(".enc.tmp")
+    temporary.write_bytes(Fernet(key).encrypt(json.dumps(state, ensure_ascii=False).encode()))
+    temporary.replace(STATE_FILE)
 
 
 def tenant_token(state):
@@ -130,16 +135,43 @@ def account_rows(account):
     return result
 
 
-def sheet_token(token):
-    query = urllib.parse.urlencode({"token": SHEET_WIKI_TOKEN})
-    data = feishu("GET", f"/wiki/v2/spaces/get_node?{query}", token)
-    node = data.get("node") or {}
-    if node.get("obj_type") != "sheet":
-        raise RuntimeError(f"Destination wiki node is {node.get('obj_type')}, expected sheet")
-    return node["obj_token"]
+def destination(state, token):
+    spreadsheet_token = state.get("combined_sheet_token")
+    sheet_id = state.get("combined_sheet_id")
+    if spreadsheet_token and sheet_id:
+        return spreadsheet_token, sheet_id
+
+    created = feishu(
+        "POST",
+        "/sheets/v3/spreadsheets",
+        token,
+        {"title": "Scoban + Saludent TikTok Combined Data"},
+    )
+    spreadsheet = created.get("spreadsheet") or created
+    spreadsheet_token = spreadsheet.get("spreadsheet_token")
+    if not spreadsheet_token:
+        raise RuntimeError("Feishu did not return the new spreadsheet token")
+    sheets = feishu(
+        "GET",
+        f"/sheets/v3/spreadsheets/{spreadsheet_token}/sheets/query",
+        token,
+    ).get("sheets") or []
+    if not sheets:
+        raise RuntimeError("The new spreadsheet has no worksheet")
+    sheet_id = sheets[0]["sheet_id"]
+    state["combined_sheet_token"] = spreadsheet_token
+    state["combined_sheet_id"] = sheet_id
+    save_state(state)
+    feishu(
+        "PATCH",
+        f"/drive/v1/permissions/{spreadsheet_token}/public?type=sheet",
+        token,
+        {"link_share_entity": "tenant_editable"},
+    )
+    return spreadsheet_token, sheet_id
 
 
-def rebuild_sheet(spreadsheet_token, rows, token):
+def rebuild_sheet(spreadsheet_token, sheet_id, rows, token):
     all_rows = [HEADERS] + rows
     for start in range(0, len(all_rows), 500):
         chunk = all_rows[start : start + 500]
@@ -151,7 +183,7 @@ def rebuild_sheet(spreadsheet_token, rows, token):
             token,
             {
                 "valueRange": {
-                    "range": f"{SHEET_ID}!A{first}:F{last}",
+                    "range": f"{sheet_id}!A{first}:F{last}",
                     "values": chunk,
                 }
             },
@@ -164,7 +196,7 @@ def rebuild_sheet(spreadsheet_token, rows, token):
             token,
             {
                 "valueRange": {
-                    "range": f"{SHEET_ID}!A{start + 1}:F{start + size}",
+                    "range": f"{sheet_id}!A{start + 1}:F{start + size}",
                     "values": [[""] * 6 for _ in range(size)],
                 }
             },
@@ -183,8 +215,12 @@ def main():
         combined.extend(rows)
         counts[configured["name"]] = len(rows)
     combined.sort(key=lambda row: str(row[3]), reverse=True)
-    rebuild_sheet(sheet_token(token), combined, token)
-    print(f"Combined Sheet refreshed: {len(combined)} rows ({counts})")
+    spreadsheet_token, sheet_id = destination(state, token)
+    rebuild_sheet(spreadsheet_token, sheet_id, combined, token)
+    print(
+        f"Combined Sheet refreshed: {len(combined)} rows ({counts}); "
+        f"https://pqwikxlxg3.feishu.cn/sheets/{spreadsheet_token}?sheet={sheet_id}"
+    )
 
 
 if __name__ == "__main__":
