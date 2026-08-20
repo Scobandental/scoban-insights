@@ -140,11 +140,11 @@ def sheet_token(token):
 
 
 def rebuild_sheet(spreadsheet_token, rows, token):
-    clear_range = urllib.parse.quote(f"{SHEET_ID}!A1:F20000", safe="")
     feishu(
-        "DELETE",
-        f"/sheets/v2/spreadsheets/{spreadsheet_token}/values/{clear_range}",
+        "POST",
+        f"/sheets/v2/spreadsheets/{spreadsheet_token}/values_batch_clear",
         token,
+        {"ranges": [f"{SHEET_ID}!A1:F20000"]},
     )
     all_rows = [HEADERS] + rows
     for start in range(0, len(all_rows), 500):
