@@ -7,6 +7,7 @@ import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -96,6 +97,20 @@ def download_media(file_token, token):
     except urllib.error.HTTPError as error:
         detail = error.read().decode(errors="replace")
         raise RuntimeError(f"Feishu media HTTP {error.code}: {detail}") from error
+
+
+def write_cover(spreadsheet_token, sheet_id, sheet_row, row, token):
+    image = download_media(row[7], token)
+    feishu(
+        "POST",
+        f"/sheets/v2/spreadsheets/{spreadsheet_token}/values_image",
+        token,
+        {
+            "range": f"{sheet_id}!D{sheet_row}:D{sheet_row}",
+            "image": list(image),
+            "name": row[8],
+        },
+    )
 
 
 def records(app_token, table_id, token):
@@ -227,22 +242,14 @@ def rebuild_sheet(spreadsheet_token, sheet_id, rows, token):
                 }
             },
         )
-    covers_written = 0
-    for sheet_row, row in enumerate(rows, start=2):
-        if not row[7]:
-            continue
-        image = download_media(row[7], token)
-        feishu(
-            "POST",
-            f"/sheets/v2/spreadsheets/{spreadsheet_token}/values_image",
-            token,
-            {
-                "range": f"{sheet_id}!D{sheet_row}:D{sheet_row}",
-                "image": list(image),
-                "name": row[8],
-            },
-        )
-        covers_written += 1
+    cover_jobs = [
+        (spreadsheet_token, sheet_id, sheet_row, row, token)
+        for sheet_row, row in enumerate(rows, start=2)
+        if row[7]
+    ]
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        list(executor.map(lambda arguments: write_cover(*arguments), cover_jobs))
+    covers_written = len(cover_jobs)
     return covers_written
 
 
