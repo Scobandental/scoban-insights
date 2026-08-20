@@ -140,12 +140,6 @@ def sheet_token(token):
 
 
 def rebuild_sheet(spreadsheet_token, rows, token):
-    feishu(
-        "POST",
-        f"/sheets/v2/spreadsheets/{spreadsheet_token}/values_batch_clear",
-        token,
-        {"ranges": [f"{SHEET_ID}!A1:F20000"]},
-    )
     all_rows = [HEADERS] + rows
     for start in range(0, len(all_rows), 500):
         chunk = all_rows[start : start + 500]
@@ -159,6 +153,19 @@ def rebuild_sheet(spreadsheet_token, rows, token):
                 "valueRange": {
                     "range": f"{SHEET_ID}!A{first}:F{last}",
                     "values": chunk,
+                }
+            },
+        )
+    for start in range(len(all_rows), 20_000, 500):
+        size = min(500, 20_000 - start)
+        feishu(
+            "PUT",
+            f"/sheets/v2/spreadsheets/{spreadsheet_token}/values",
+            token,
+            {
+                "valueRange": {
+                    "range": f"{SHEET_ID}!A{start + 1}:F{start + size}",
+                    "values": [[""] * 6 for _ in range(size)],
                 }
             },
         )
