@@ -17,7 +17,15 @@ from cryptography.fernet import Fernet, InvalidToken
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.enc"
 TLS = ssl.create_default_context(cafile=certifi.where())
-HEADERS = ["Account", "Video ID", "Caption", "Posted Date", "TikTok URL", "Views"]
+HEADERS = [
+    "Posted Date",
+    "Account",
+    "Video ID",
+    "Cover Image",
+    "TikTok URL",
+    "Views",
+    "Caption",
+]
 
 
 def http(method, url, data=None, headers=None):
@@ -77,6 +85,19 @@ def feishu(method, path, token, data=None):
     return result.get("data") or {}
 
 
+def download_media(file_token, token):
+    request = urllib.request.Request(
+        f"https://open.feishu.cn/open-apis/drive/v1/medias/{file_token}/download",
+        headers={"Authorization": "Bearer " + token},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60, context=TLS) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode(errors="replace")
+        raise RuntimeError(f"Feishu media HTTP {error.code}: {detail}") from error
+
+
 def records(app_token, table_id, token):
     items, page_token = [], None
     while True:
@@ -122,14 +143,19 @@ def account_rows(account):
     result = []
     for record in account["records"]:
         fields = record.get("fields") or {}
+        covers = fields.get("Video Cover") or []
+        cover = covers[0] if covers and isinstance(covers[0], dict) else {}
         result.append(
             [
+                date_value(fields.get("Posted Date")),
                 account["name"],
                 str(scalar(fields.get("Video ID"))),
-                scalar(fields.get("Caption")),
-                date_value(fields.get("Posted Date")),
+                "",
                 scalar(fields.get("TikTok URL")),
                 scalar(fields.get("Views")),
+                scalar(fields.get("Caption")),
+                cover.get("file_token") or "",
+                cover.get("name") or "cover.jpg",
             ]
         )
     return result
@@ -172,7 +198,7 @@ def destination(state, token):
 
 
 def rebuild_sheet(spreadsheet_token, sheet_id, rows, token):
-    all_rows = [HEADERS] + rows
+    all_rows = [HEADERS] + [row[:7] for row in rows]
     for start in range(0, len(all_rows), 500):
         chunk = all_rows[start : start + 500]
         first = start + 1
@@ -183,7 +209,7 @@ def rebuild_sheet(spreadsheet_token, sheet_id, rows, token):
             token,
             {
                 "valueRange": {
-                    "range": f"{sheet_id}!A{first}:F{last}",
+                    "range": f"{sheet_id}!A{first}:G{last}",
                     "values": chunk,
                 }
             },
@@ -196,11 +222,28 @@ def rebuild_sheet(spreadsheet_token, sheet_id, rows, token):
             token,
             {
                 "valueRange": {
-                    "range": f"{sheet_id}!A{start + 1}:F{start + size}",
-                    "values": [[""] * 6 for _ in range(size)],
+                    "range": f"{sheet_id}!A{start + 1}:G{start + size}",
+                    "values": [[""] * 7 for _ in range(size)],
                 }
             },
         )
+    covers_written = 0
+    for sheet_row, row in enumerate(rows, start=2):
+        if not row[7]:
+            continue
+        image = download_media(row[7], token)
+        feishu(
+            "POST",
+            f"/sheets/v2/spreadsheets/{spreadsheet_token}/values_image",
+            token,
+            {
+                "range": f"{sheet_id}!D{sheet_row}:D{sheet_row}",
+                "image": list(image),
+                "name": row[8],
+            },
+        )
+        covers_written += 1
+    return covers_written
 
 
 def main():
@@ -214,11 +257,12 @@ def main():
         rows = account_rows(account)
         combined.extend(rows)
         counts[configured["name"]] = len(rows)
-    combined.sort(key=lambda row: str(row[3]), reverse=True)
+    combined.sort(key=lambda row: str(row[0]), reverse=True)
     spreadsheet_token, sheet_id = destination(state, token)
-    rebuild_sheet(spreadsheet_token, sheet_id, combined, token)
+    covers_written = rebuild_sheet(spreadsheet_token, sheet_id, combined, token)
     print(
-        f"Combined Sheet refreshed: {len(combined)} rows ({counts}); "
+        f"Combined Sheet refreshed: {len(combined)} rows ({counts}), "
+        f"{covers_written} covers; "
         f"https://pqwikxlxg3.feishu.cn/sheets/{spreadsheet_token}?sheet={sheet_id}"
     )
 
