@@ -4,6 +4,7 @@
 import json
 import os
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -75,12 +76,16 @@ def tenant_token(state):
 
 
 def feishu(method, path, token, data=None):
-    result = http(
-        method,
-        "https://open.feishu.cn/open-apis" + path,
-        data,
-        {"Authorization": "Bearer " + token},
-    )
+    for attempt in range(8):
+        result = http(
+            method,
+            "https://open.feishu.cn/open-apis" + path,
+            data,
+            {"Authorization": "Bearer " + token},
+        )
+        if result.get("code") != 90217:
+            break
+        time.sleep(min(2**attempt, 10))
     if result.get("code", 0) != 0:
         raise RuntimeError(f"Feishu request failed: {result.get('code')} {result.get('msg')}")
     return result.get("data") or {}
@@ -247,7 +252,7 @@ def rebuild_sheet(spreadsheet_token, sheet_id, rows, token):
         for sheet_row, row in enumerate(rows, start=2)
         if row[7]
     ]
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=2) as executor:
         list(executor.map(lambda arguments: write_cover(*arguments), cover_jobs))
     covers_written = len(cover_jobs)
     return covers_written
