@@ -11,6 +11,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import certifi
 from cryptography.fernet import Fernet, InvalidToken
@@ -27,6 +28,7 @@ HEADERS = [
     "TikTok URL",
     "Views",
     "Caption",
+    "Last Synced (Malaysia Time)",
 ]
 
 
@@ -105,7 +107,7 @@ def download_media(file_token, token):
 
 
 def write_cover(spreadsheet_token, sheet_id, sheet_row, row, token):
-    image = download_media(row[7], token)
+    image = download_media(row[8], token)
     feishu(
         "POST",
         f"/sheets/v2/spreadsheets/{spreadsheet_token}/values_image",
@@ -113,7 +115,7 @@ def write_cover(spreadsheet_token, sheet_id, sheet_row, row, token):
         {
             "range": f"{sheet_id}!D{sheet_row}:D{sheet_row}",
             "image": list(image),
-            "name": row[8],
+            "name": row[9],
         },
     )
 
@@ -159,7 +161,7 @@ def date_value(value):
     return value
 
 
-def account_rows(account):
+def account_rows(account, synced_at):
     result = []
     for record in account["records"]:
         fields = record.get("fields") or {}
@@ -174,6 +176,7 @@ def account_rows(account):
                 scalar(fields.get("TikTok URL")),
                 scalar(fields.get("Views")),
                 scalar(fields.get("Caption")),
+                synced_at,
                 cover.get("file_token") or "",
                 cover.get("name") or "cover.jpg",
             ]
@@ -218,7 +221,7 @@ def destination(state, token):
 
 
 def rebuild_sheet(spreadsheet_token, sheet_id, rows, token):
-    all_rows = [HEADERS] + [row[:7] for row in rows]
+    all_rows = [HEADERS] + [row[:8] for row in rows]
     for start in range(0, len(all_rows), 500):
         chunk = all_rows[start : start + 500]
         first = start + 1
@@ -229,7 +232,7 @@ def rebuild_sheet(spreadsheet_token, sheet_id, rows, token):
             token,
             {
                 "valueRange": {
-                    "range": f"{sheet_id}!A{first}:G{last}",
+                    "range": f"{sheet_id}!A{first}:H{last}",
                     "values": chunk,
                 }
             },
@@ -242,15 +245,15 @@ def rebuild_sheet(spreadsheet_token, sheet_id, rows, token):
             token,
             {
                 "valueRange": {
-                    "range": f"{sheet_id}!A{start + 1}:G{start + size}",
-                    "values": [[""] * 7 for _ in range(size)],
+                    "range": f"{sheet_id}!A{start + 1}:H{start + size}",
+                    "values": [[""] * 8 for _ in range(size)],
                 }
             },
         )
     cover_jobs = [
         (spreadsheet_token, sheet_id, sheet_row, row, token)
         for sheet_row, row in enumerate(rows, start=2)
-        if row[7]
+        if row[8]
     ]
     with ThreadPoolExecutor(max_workers=2) as executor:
         list(executor.map(lambda arguments: write_cover(*arguments), cover_jobs))
@@ -263,10 +266,11 @@ def main():
     token = tenant_token(state)
     combined = []
     counts = {}
+    synced_at = datetime.now(ZoneInfo("Asia/Kuala_Lumpur")).strftime("%Y/%m/%d %H:%M:%S")
     for configured in state["accounts"]:
         current = records(state["feishu_app_token"], configured["table_id"], token)
         account = {"name": configured["name"], "records": current}
-        rows = account_rows(account)
+        rows = account_rows(account, synced_at)
         combined.extend(rows)
         counts[configured["name"]] = len(rows)
     combined.sort(key=lambda row: str(row[0]), reverse=True)
