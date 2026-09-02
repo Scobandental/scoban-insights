@@ -16,6 +16,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.enc"
+ELEPHANT_STATE_FILE = ROOT / "state_elephant.enc"
 TLS = ssl.create_default_context(cafile=certifi.where())
 
 
@@ -37,17 +38,17 @@ def request(url, data=None, headers=None, form=False):
         raise RuntimeError(f"Remote API request failed with HTTP {error.code}") from error
 
 
-def load_state(cipher):
+def load_state(cipher, path=STATE_FILE):
     try:
-        return json.loads(cipher.decrypt(STATE_FILE.read_bytes()))
+        return json.loads(cipher.decrypt(path.read_bytes()))
     except (InvalidToken, ValueError, KeyError) as error:
         raise RuntimeError("Encrypted sync state could not be opened") from error
 
 
-def save_state(cipher, state):
-    temporary = STATE_FILE.with_suffix(".enc.tmp")
+def save_state(cipher, state, path=STATE_FILE):
+    temporary = path.with_suffix(".enc.tmp")
     temporary.write_bytes(cipher.encrypt(json.dumps(state, ensure_ascii=False).encode()))
-    temporary.replace(STATE_FILE)
+    temporary.replace(path)
 
 
 def refresh_tiktok(state, account):
@@ -192,12 +193,21 @@ def main():
         raise RuntimeError("SYNC_ENCRYPTION_KEY is not configured")
     cipher = Fernet(key)
     state = load_state(cipher)
+    accounts = list(state["accounts"])
+    elephant_state = elephant_cipher = None
+    if ELEPHANT_STATE_FILE.exists():
+        elephant_key = os.environ.get("ELEPHANT_STATE_ENCRYPTION_KEY", "").encode()
+        if not elephant_key:
+            raise RuntimeError("ELEPHANT_STATE_ENCRYPTION_KEY is not configured")
+        elephant_cipher = Fernet(elephant_key)
+        elephant_state = load_state(elephant_cipher, ELEPHANT_STATE_FILE)
+        accounts.append(elephant_state["account"])
     token = feishu_token(state)
     now = int(time.time() * 1000)
     total_existing = total_creates = total_updates = 0
     covers_added = cover_failures = 0
     account_counts = []
-    for account in state["accounts"]:
+    for account in accounts:
         account_name = account["name"]
         table_id = account["table_id"]
         access_token = refresh_tiktok(state, account)
@@ -255,6 +265,8 @@ def main():
         total_updates += len(updates)
         total_creates += len(creates)
     save_state(cipher, state)
+    if elephant_state is not None:
+        save_state(elephant_cipher, elephant_state, ELEPHANT_STATE_FILE)
     print(
         f"Sync complete: {total_updates} updated, {total_creates} added, "
         f"{total_existing + total_creates} total rows across separate tables "

@@ -34,6 +34,7 @@ jobs:
       - name: Synchronize TikTok analytics into Base
         env:
           SYNC_ENCRYPTION_KEY: ${{ secrets.SYNC_ENCRYPTION_KEY }}
+          ELEPHANT_STATE_ENCRYPTION_KEY: ${{ secrets.ELEPHANT_STATE_ENCRYPTION_KEY }}
         run: python automation/sync.py
 
       - name: Rebuild combined Scoban and Saludent Sheet
@@ -43,11 +44,11 @@ jobs:
 
       - name: Save rotated encrypted token
         run: |
-          if git diff --quiet -- automation/state.enc; then
+          if git diff --quiet -- automation/state.enc automation/state_elephant.enc; then
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add automation/state.enc
+          git add automation/state.enc automation/state_elephant.enc
           git commit -m "Refresh encrypted TikTok token"
           git push
