@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rebuild the combined Feishu Sheet tab from the two TikTok Base tables."""
+"""Rebuild the combined Feishu Sheet tab from all TikTok Base tables."""
 
 import json
 import os
@@ -19,6 +19,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.enc"
+ELEPHANT_STATE_FILE = ROOT / "state_elephant.enc"
 TLS = ssl.create_default_context(cafile=certifi.where())
 HEADERS = [
     "Posted Date",
@@ -64,6 +65,20 @@ def save_state(state):
     temporary = STATE_FILE.with_suffix(".enc.tmp")
     temporary.write_bytes(Fernet(key).encrypt(json.dumps(state, ensure_ascii=False).encode()))
     temporary.replace(STATE_FILE)
+
+
+def configured_accounts(state):
+    accounts = list(state["accounts"])
+    if ELEPHANT_STATE_FILE.exists():
+        key = os.environ.get("ELEPHANT_STATE_ENCRYPTION_KEY", "").encode()
+        if not key:
+            raise RuntimeError("ELEPHANT_STATE_ENCRYPTION_KEY is not configured")
+        try:
+            extra = json.loads(Fernet(key).decrypt(ELEPHANT_STATE_FILE.read_bytes()))
+        except (InvalidToken, ValueError, KeyError) as error:
+            raise RuntimeError("Elephant Pal encrypted sync state could not be opened") from error
+        accounts.append(extra["account"])
+    return accounts
 
 
 def tenant_token(state):
@@ -267,7 +282,7 @@ def main():
     combined = []
     counts = {}
     synced_at = datetime.now(ZoneInfo("Asia/Kuala_Lumpur")).strftime("%Y/%m/%d %H:%M:%S")
-    for configured in state["accounts"]:
+    for configured in configured_accounts(state):
         current = records(state["feishu_app_token"], configured["table_id"], token)
         account = {"name": configured["name"], "records": current}
         rows = account_rows(account, synced_at)
