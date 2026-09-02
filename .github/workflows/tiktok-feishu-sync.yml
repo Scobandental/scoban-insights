@@ -37,9 +37,10 @@ jobs:
           ELEPHANT_STATE_ENCRYPTION_KEY: ${{ secrets.ELEPHANT_STATE_ENCRYPTION_KEY }}
         run: python automation/sync.py
 
-      - name: Rebuild combined Scoban and Saludent Sheet
+      - name: Rebuild combined TikTok Sheet
         env:
           SYNC_ENCRYPTION_KEY: ${{ secrets.SYNC_ENCRYPTION_KEY }}
+          ELEPHANT_STATE_ENCRYPTION_KEY: ${{ secrets.ELEPHANT_STATE_ENCRYPTION_KEY }}
         run: python automation/base_to_sheet.py
 
       - name: Save rotated encrypted token
