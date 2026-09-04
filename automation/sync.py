@@ -18,6 +18,22 @@ ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.enc"
 ELEPHANT_STATE_FILE = ROOT / "state_elephant.enc"
 TLS = ssl.create_default_context(cafile=certifi.where())
+SNAPSHOT_AGE_SECONDS = 14 * 24 * 60 * 60
+
+
+def capture_14_day_snapshot(account, video, now_seconds):
+    """Freeze the first view count observed at least 14 days after publishing."""
+    video_id = str(video.get("id") or "")
+    created_at = int(video.get("create_time") or 0)
+    if not video_id or not created_at or now_seconds < created_at + SNAPSHOT_AGE_SECONDS:
+        return False
+
+    snapshots = account.setdefault("view_snapshots_14d", {})
+    if video_id in snapshots:
+        return False
+
+    snapshots[video_id] = int(video.get("view_count") or 0)
+    return True
 
 
 def request(url, data=None, headers=None, form=False):
@@ -204,7 +220,7 @@ def main():
         accounts.append(elephant_state["account"])
     token = feishu_token(state)
     now = int(time.time() * 1000)
-    total_existing = total_creates = total_updates = 0
+    total_existing = total_creates = total_updates = total_snapshots = 0
     covers_added = cover_failures = 0
     account_counts = []
     for account in accounts:
@@ -224,6 +240,8 @@ def main():
         for video in videos:
             video_id = str(video.get("id", ""))
             share_url = video.get("share_url") or ""
+            if capture_14_day_snapshot(account, video, now // 1000):
+                total_snapshots += 1
             fields = {
                 "Video ID": video_id,
                 "Caption": video.get("title") or video.get("video_description") or "",
@@ -271,7 +289,8 @@ def main():
         f"Sync complete: {total_updates} updated, {total_creates} added, "
         f"{total_existing + total_creates} total rows across separate tables "
         f"({', '.join(account_counts)}); {covers_added} covers added, "
-        f"{cover_failures} covers unavailable."
+        f"{cover_failures} covers unavailable; {total_snapshots} new 14-day "
+        "view snapshots captured."
     )
 
 

@@ -31,6 +31,7 @@ HEADERS = [
     "Caption",
     "Last Synced (Malaysia Time)",
 ]
+SNAPSHOT_HEADER = "14 Days Record Views"
 
 
 def http(method, url, data=None, headers=None):
@@ -178,15 +179,17 @@ def date_value(value):
 
 def account_rows(account, synced_at):
     result = []
+    snapshots = account.get("view_snapshots_14d") or {}
     for record in account["records"]:
         fields = record.get("fields") or {}
+        video_id = str(scalar(fields.get("Video ID")))
         covers = fields.get("Video Cover") or []
         cover = covers[0] if covers and isinstance(covers[0], dict) else {}
         result.append(
             [
                 date_value(fields.get("Posted Date")),
                 account["name"],
-                str(scalar(fields.get("Video ID"))),
+                video_id,
                 "",
                 scalar(fields.get("TikTok URL")),
                 scalar(fields.get("Views")),
@@ -194,6 +197,7 @@ def account_rows(account, synced_at):
                 synced_at,
                 cover.get("file_token") or "",
                 cover.get("name") or "cover.jpg",
+                snapshots.get(video_id, ""),
             ]
         )
     return result
@@ -265,6 +269,35 @@ def rebuild_sheet(spreadsheet_token, sheet_id, rows, token):
                 }
             },
         )
+    snapshot_rows = [[SNAPSHOT_HEADER]] + [[row[10]] for row in rows]
+    for start in range(0, len(snapshot_rows), 500):
+        chunk = snapshot_rows[start : start + 500]
+        first = start + 1
+        last = start + len(chunk)
+        feishu(
+            "PUT",
+            f"/sheets/v2/spreadsheets/{spreadsheet_token}/values",
+            token,
+            {
+                "valueRange": {
+                    "range": f"{sheet_id}!J{first}:J{last}",
+                    "values": chunk,
+                }
+            },
+        )
+    for start in range(len(snapshot_rows), 20_000, 500):
+        size = min(500, 20_000 - start)
+        feishu(
+            "PUT",
+            f"/sheets/v2/spreadsheets/{spreadsheet_token}/values",
+            token,
+            {
+                "valueRange": {
+                    "range": f"{sheet_id}!J{start + 1}:J{start + size}",
+                    "values": [[""] for _ in range(size)],
+                }
+            },
+        )
     cover_jobs = [
         (spreadsheet_token, sheet_id, sheet_row, row, token)
         for sheet_row, row in enumerate(rows, start=2)
@@ -284,7 +317,11 @@ def main():
     synced_at = datetime.now(ZoneInfo("Asia/Kuala_Lumpur")).strftime("%Y/%m/%d %H:%M:%S")
     for configured in configured_accounts(state):
         current = records(state["feishu_app_token"], configured["table_id"], token)
-        account = {"name": configured["name"], "records": current}
+        account = {
+            "name": configured["name"],
+            "records": current,
+            "view_snapshots_14d": configured.get("view_snapshots_14d") or {},
+        }
         rows = account_rows(account, synced_at)
         combined.extend(rows)
         counts[configured["name"]] = len(rows)
